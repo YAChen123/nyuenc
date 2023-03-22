@@ -1,0 +1,14 @@
+# ignore ALL .log files
+*.log
+
+# ignore ALL files in ANY directory named temp
+temp/
+
+# ignore all the zip file
+*.zip
+
+# ingore the autograder file
+nyuenc-autograder/
+
+# ingore ds_store
+**/.DS_Store
