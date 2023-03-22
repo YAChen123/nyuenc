@@ -66,6 +66,7 @@ int rle(int argc, char **argv){
     char buf[BUF_SIZE];
     ssize_t nread;
 
+    // Concat the multiple input files into new_input.txt
     fd_new_in = open("new_input.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if(fd_new_in == -1){
         perror("open");
@@ -101,7 +102,7 @@ int rle(int argc, char **argv){
         perror("close");
         exit(0);
     }
-
+    // Read new_input.txt into pointer char array *addr
     fd_new_in = open("new_input.txt", O_RDONLY);
     if (fd_new_in == -1) {
         perror("open");
@@ -119,12 +120,14 @@ int rle(int argc, char **argv){
         exit(0);
     }
 
+    // detmerine the number of threads for sequential or parallel RLE
     if(jobs == 1){
         sequential(addr, sb.st_size);
     }else{
         parallel();
     }
 
+    // free addr
     if (munmap(addr, sb.st_size) == -1) {
         perror("munmap");
         exit(0);
