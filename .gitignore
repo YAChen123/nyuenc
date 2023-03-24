@@ -12,3 +12,7 @@ nyuenc-autograder/
 
 # ingore ds_store
 **/.DS_Store
+
+# ignore input and outfile
+*.in
+*.out
