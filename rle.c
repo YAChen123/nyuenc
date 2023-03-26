@@ -35,9 +35,6 @@ typedef struct{
 typedef struct{
     Result **results;
     int num_results;
-    int current_result;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
 } ResultQueue;
 
 typedef struct{
@@ -45,11 +42,11 @@ typedef struct{
     ResultQueue *resultQueue;
 } WorkerArgs;
 
+// Create Task Queue
 TaskQueue *create_task_queue(char *data, size_t size){
+    // allocate memory for task queue struct
     TaskQueue *queue = (TaskQueue *)malloc(sizeof(TaskQueue));
-    if(queue == NULL){
-        perror("malloc");
-    }
+    // calculate the number of chunks needed to store the data
     if(size <= CHUNK_SIZE){
         queue->num_chunks = 1;
     }else{
@@ -58,146 +55,148 @@ TaskQueue *create_task_queue(char *data, size_t size){
             queue->num_chunks++;
         }
     }
-    
+    // allocate memory for array of chunks pointers
     queue->chunks = (Chunk **)malloc(queue->num_chunks * sizeof(Chunk *));
-    if(queue->chunks == NULL){
-        perror("malloc");
-    }
+    // initialize current chunk to index 0
     queue->current_chunk = 0;
+    // loop though each chunk and allocate memory 
     for (int i = 0; i < queue->num_chunks; i++){
+
+        // allocate memory for chunk struct
         Chunk *chunk = (Chunk *)malloc(sizeof(Chunk));
-        if(chunk == NULL){
-            perror("malloc");
-        }
+        // assign chunk index to i
         chunk->index = i;
+        // assign chunk size to fixed CHUNK_SIZE
         if (i < queue->num_chunks - 1){
             chunk->size = CHUNK_SIZE;
         }
+        // last chunk size is smaller or equal to CHUNK_SIZE
         else{
             chunk->size = size % CHUNK_SIZE == 0 ? CHUNK_SIZE : size % CHUNK_SIZE;
         }
+        // allocate memory for chunk data struct
         chunk->data = (char *)malloc(chunk->size * sizeof(char));
-        if(chunk->data == NULL){
-            perror("malloc");
-        }
+        // Copy the corresponding part of the input data into the chunk's data buffer
         memcpy(chunk->data, data + i * CHUNK_SIZE, chunk->size);
+        // add chunk to the chunks array in the task queue
         queue->chunks[i] = chunk;
     }
+    // init mutex and conditional variable
     pthread_mutex_init(&queue->mutex, NULL);
     pthread_cond_init(&queue->cond, NULL);
     return queue;
 }
 
+// Destory Task Queue
 void destroy_task_queue(TaskQueue *queue){
+    // loop through chunk and deallocate memorys
     for (int i = 0; i < queue->num_chunks; i++){
         free(queue->chunks[i]->data);
         free(queue->chunks[i]);
     }
     free(queue->chunks);
+    // mutex and conditional variable
     pthread_mutex_destroy(&queue->mutex);
     pthread_cond_destroy(&queue->cond);
     free(queue);
 }
 
+// Dequeue from Task Queue
 Chunk *dequeue_task(TaskQueue *queue){
+    // acquire the mutex lock to protect share resources
     pthread_mutex_lock(&queue->mutex);
     Chunk *chunk = NULL;
+    // check if there are unprocesses chunk in the queue
     if(queue->current_chunk < queue->num_chunks){
+        // get the unprocess chunk
         chunk = queue->chunks[queue->current_chunk];
         queue->current_chunk++;
     }
+    // release the mutex lock
     pthread_mutex_unlock(&queue->mutex);
     return chunk;
 }
 
+// Create Result Queue
 ResultQueue *create_result_queue(int num_results){
+    // allocate memory for Result queue struct
     ResultQueue *queue = (ResultQueue *)malloc(sizeof(ResultQueue));
+    // assign number of results
     queue->num_results = num_results;
+    // allocate memory for array of results
     queue->results = (Result **)malloc(num_results * sizeof(Result *));
+    // loop over the array and initial the result to NULL
     for (int i = 0; i < num_results; i++){
         queue->results[i] = NULL;
     }
-    queue->current_result = 0;
-    pthread_mutex_init(&queue->mutex, NULL);
-    pthread_cond_init(&queue->cond, NULL);
     return queue;
 }
 
+// Destory Result Queue
 void destroy_result_queue(ResultQueue *queue){
+    // loop through results and deallocate memorys
     for (int i = 0; i < queue->num_results; i++){
         free(queue->results[i]->data);
         free(queue->results[i]);
     }
     free(queue->results);
-    pthread_mutex_destroy(&queue->mutex);
-    pthread_cond_destroy(&queue->cond);
+    // deallocate result queue
     free(queue);
 }
 
+// Enqueue Result
 void enqueue_result(ResultQueue *queue, Result *result){
-    pthread_mutex_lock(&queue->mutex);
     if(result->index < queue->num_results){
         queue->results[result->index] = result;
     }
-    //pthread_cond_signal(&queue->cond);
-    pthread_mutex_unlock(&queue->mutex);
 }
 
-Result *dequeue_result(ResultQueue *queue, int index){
-    pthread_mutex_lock(&queue->mutex);
-    Result *result = queue->results[index];
-    pthread_mutex_unlock(&queue->mutex);
-    return result;
-}
-
+// Worker Thread
 void *worker_thread(void *arg){
     WorkerArgs *worker_arg = (WorkerArgs *) arg;
     while (1){
+        // Dequeue a task from task queue 
         Chunk *chunk = dequeue_task(worker_arg->taskQueue);
+        // check if all unprocesses task is finished
         if (chunk == NULL){
             break;
         }
-
         // Process the chunk here
         char *addr = chunk->data;
 
-        // Create a Result struct
+        // allocate memory for a result struct
         Result *result = (Result *)malloc(sizeof(Result));
+        // allocate memory for each data
         result->data = (unsigned char *)malloc(chunk->size*2 * sizeof(unsigned char));
         result->size = 0;
         result->index = chunk->index;
 
+        // RLE alorithem
         unsigned char count = 1; 
         char prev_char = addr[0];
 
-        // iterate over addr
+        // iterate over data
         for(size_t i = 1; i<chunk->size; i++){
             char curr_char = addr[i];
 
-            // we can assume that no character will appear more than 255 times in a row. 
+            // we can assume that no character will appear more than 255 times in a row
             if(curr_char == prev_char){
                 count++;
             }else{
-                //unsigned char data[2] = {prev_char, count};
-                result->data[result->size] = prev_char;
-                result->size++;
-                result->data[result->size] = count;
-                result->size++;
+                result->data[result->size++] = prev_char;
+                result->data[result->size++] = count;
 
                 count = 1;
                 prev_char = curr_char;
             }
         }
         //unsigned char data[2] = {prev_char, count};
-        result->data[result->size] = prev_char;
-        result->size++;
-        result->data[result->size] = count;
-        result->size++;
+        result->data[result->size++] = prev_char;
+        result->data[result->size++] = count;
         result->data = (unsigned char *) realloc(result->data, result->size);
 
         // Enqueue the Result
         enqueue_result(worker_arg->resultQueue, result);
-        //free(task_queue);
     }
     pthread_exit(NULL);
 }
@@ -247,34 +246,35 @@ int sequential(char *addr, size_t size){
 }
 
 int parallel(int num_threads, char *addr, size_t size){
+    // Init Task Queue, Result Queue, Threads Pool, WorkerArgs
     TaskQueue *task_queue = create_task_queue(addr, size);
     ResultQueue *result_queue = create_result_queue(task_queue->num_chunks);
     pthread_t *threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
     WorkerArgs *args = (WorkerArgs *)malloc(num_threads * sizeof(WorkerArgs));
 
+    // loop over number of threads
     for (int i = 0; i < num_threads; i++){
         args[i].taskQueue = task_queue;
         args[i].resultQueue = result_queue;
+        // create thread and ready to become worker
         pthread_create(&threads[i], NULL, worker_thread, &args[i]);
     }
 
+    // loop over number of threads
     for (int i = 0; i < num_threads; i++){
+        // wait for threads to finished
         pthread_join(threads[i], NULL);
     }
 
-    Result *prev_result = dequeue_result(result_queue, 0); 
+    // Collect the results and write to STDOUT
+    Result *prev_result = result_queue->results[0];
     for (int i = 1; i < result_queue->num_results; i++){
-        Result *curr_result = dequeue_result(result_queue,i);
+        Result *curr_result = result_queue->results[i];
         char curr_head_char = curr_result->data[0];
         char prev_tail_char = prev_result->data[prev_result->size -2];
 
         if(curr_head_char == prev_tail_char){
             curr_result->data[1] = prev_result->data[prev_result->size -1] + curr_result->data[1];
-            
-            //prev_result->data[prev_result->size -1] = prev_result->data[prev_result->size -1] + curr_result->data[1];
-            //curr_result->data+=2;
-            //curr_result->size-=2;
-            //curr_result->data = (unsigned char *) realloc(curr_result->data, curr_result->size);
             for(size_t j = 0; j<prev_result->size-2;j++){
                 fwrite(&prev_result->data[j], sizeof(unsigned char), 1, stdout);
             }
@@ -286,18 +286,17 @@ int parallel(int num_threads, char *addr, size_t size){
     }
     fwrite(prev_result->data, sizeof(unsigned char), prev_result->size, stdout);
 
+    // deallocate task queue, result queue, thread pool, and workers_arg
     destroy_task_queue(task_queue);
     destroy_result_queue(result_queue);
     free(threads);
     free(args);
-
     return 0;
 }
 
 
 int rle(int argc, char **argv){
     int jobs = get_num_thread(argc, argv);
-
     int fd_in, fd_new_in;
     struct stat sb;
     char buf[BUF_SIZE];
